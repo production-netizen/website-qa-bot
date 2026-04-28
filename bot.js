@@ -117,17 +117,40 @@ async function persistAudit(audit) {
   return { driveLink };
 }
 
-async function runOnce() {
+function fuzzyMatchClients(clients, query) {
+  if (!query) return clients;
+  const q = query.trim().toLowerCase();
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return clients.filter((c) => {
+    const name = c.name.toLowerCase();
+    return tokens.every((t) => name.includes(t));
+  });
+}
+
+async function runOnce({ clientFilter = null } = {}) {
   const runAt = new Date().toISOString();
   logLine(`=== Website QA run starting at ${runAt} ===`);
   ensureDir(DATA_DIR);
   ensureDir(REPORTS_DIR);
 
-  const statusFilter = process.env.QA_STATUS_FILTER || 'Live';
+  const statusFilter = clientFilter
+    ? (process.env.QA_STATUS_FILTER || 'Live') + ',Staging'
+    : (process.env.QA_STATUS_FILTER || 'Live');
   const concurrency = parseInt(process.env.QA_CONCURRENCY || '4', 10);
 
-  const clients = await loadClients({ statusFilter });
-  logLine(`[run] loaded ${clients.length} clients (filter=${statusFilter})`);
+  let clients = await loadClients({ statusFilter });
+  if (clientFilter) {
+    const matched = fuzzyMatchClients(clients, clientFilter);
+    if (matched.length === 0) {
+      logLine(`[run] no client matched "${clientFilter}" — aborting`);
+      return { summaries: [], errors: [`No client matched "${clientFilter}"`], matchAmbiguous: null };
+    }
+    if (matched.length > 1) {
+      logLine(`[run] "${clientFilter}" matched ${matched.length} clients: ${matched.map((c) => c.name).join(', ')} — running all of them`);
+    }
+    clients = matched;
+  }
+  logLine(`[run] loaded ${clients.length} clients (filter=${statusFilter}${clientFilter ? `, name="${clientFilter}"` : ''})`);
 
   const summaries = [];
   const errors = [];
@@ -189,9 +212,19 @@ process.on('unhandledRejection', (err) => {
   logLine(`[fatal] unhandledRejection: ${err && (err.stack || err.message) || err}`);
 });
 
+function parseArgs() {
+  const args = { once: false, clientFilter: null };
+  for (const a of process.argv.slice(2)) {
+    if (a === '--once') args.once = true;
+    else if (a.startsWith('--client=')) args.clientFilter = a.slice('--client='.length).replace(/^["']|["']$/g, '');
+  }
+  return args;
+}
+
 if (require.main === module) {
-  if (process.argv.includes('--once')) {
-    runOnce()
+  const args = parseArgs();
+  if (args.once) {
+    runOnce({ clientFilter: args.clientFilter })
       .then(async () => {
         await Promise.all([closeVisionBrowser().catch(() => {}), closeLhBrowser().catch(() => {})]);
         process.exit(0);
