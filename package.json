@@ -1,0 +1,22 @@
+{
+  "name": "website-qa-bot",
+  "version": "1.0.0",
+  "description": "AHM client website QA — daily audit of every client site (PageSpeed, SEO, layout, images) → markdown report on Drive + Discord summary",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "once": "node scripts/run-once.js",
+    "setup-channel": "node scripts/setup-channel.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.86.1",
+    "discord.js": "^14.26.2",
+    "dotenv": "^17.4.1",
+    "googleapis": "^171.4.0",
+    "lighthouse": "^13.1.0",
+    "node-cron": "^4.2.1",
+    "node-fetch": "^2.7.0",
+    "puppeteer": "^24.40.0"
+  }
+}
