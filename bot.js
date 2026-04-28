@@ -5,11 +5,11 @@ const cron = require('node-cron');
 
 const { loadClients } = require('./lib/sheet');
 const { discoverPages } = require('./lib/crawl');
-const { auditUrl: lighthouseAudit } = require('./lib/lighthouse');
+const { auditUrl: lighthouseAudit, closeBrowser: closeLhBrowser } = require('./lib/lighthouse');
 const { analyseUrl } = require('./lib/seo');
 const { fetchHtml } = require('./lib/seo');
 const { auditPageImages } = require('./lib/images');
-const { visionAuditUrl, closeBrowser } = require('./lib/vision');
+const { visionAuditUrl, closeBrowser: closeVisionBrowser } = require('./lib/vision');
 const { buildClientMarkdown, summariseClient, saveReportToDrive, saveLocalReport } = require('./lib/report');
 const { postSummary } = require('./lib/discord');
 
@@ -132,6 +132,12 @@ async function runOnce() {
   const summaries = [];
   const errors = [];
 
+  const partialPath = path.join(DATA_DIR, `summary-${runAt.slice(0, 10)}.json`);
+  const persistPartial = () => {
+    try { fs.writeFileSync(partialPath, JSON.stringify({ runAt, summaries, errors, partial: true }, null, 2)); }
+    catch {}
+  };
+
   await pMap(clients, async (client) => {
     try {
       const audit = await auditClient(client);
@@ -140,16 +146,17 @@ async function runOnce() {
       summary.reportLink = driveLink;
       summaries.push(summary);
       logLine(`[done] ${client.name} — flags=${summary.flagCount}`);
+      persistPartial();
     } catch (err) {
       errors.push(`${client.name}: ${err.message}`);
       logLine(`[error] ${client.name}: ${err.message}`);
+      persistPartial();
     }
   }, concurrency);
 
-  await closeBrowser().catch(() => {});
+  await Promise.all([closeVisionBrowser().catch(() => {}), closeLhBrowser().catch(() => {})]);
 
-  const allDataPath = path.join(DATA_DIR, `summary-${runAt.slice(0, 10)}.json`);
-  fs.writeFileSync(allDataPath, JSON.stringify({ runAt, summaries, errors }, null, 2));
+  fs.writeFileSync(partialPath, JSON.stringify({ runAt, summaries, errors, partial: false }, null, 2));
 
   try {
     await postSummary({
@@ -175,9 +182,25 @@ function startCron() {
   logLine(`[boot] website-qa-bot online — daily run at "${expr}" (${tz})`);
 }
 
+process.on('uncaughtException', (err) => {
+  logLine(`[fatal] uncaughtException: ${err.stack || err.message}`);
+});
+process.on('unhandledRejection', (err) => {
+  logLine(`[fatal] unhandledRejection: ${err && (err.stack || err.message) || err}`);
+});
+
 if (require.main === module) {
   if (process.argv.includes('--once')) {
-    runOnce().then(() => process.exit(0)).catch((err) => { console.error(err); process.exit(1); });
+    runOnce()
+      .then(async () => {
+        await Promise.all([closeVisionBrowser().catch(() => {}), closeLhBrowser().catch(() => {})]);
+        process.exit(0);
+      })
+      .catch(async (err) => {
+        logLine(`[fatal] runOnce: ${err.stack || err.message}`);
+        await Promise.all([closeVisionBrowser().catch(() => {}), closeLhBrowser().catch(() => {})]);
+        process.exit(1);
+      });
   } else {
     startCron();
   }
