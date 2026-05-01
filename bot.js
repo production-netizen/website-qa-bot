@@ -39,13 +39,43 @@ async function pMap(items, mapper, concurrency) {
   return results;
 }
 
+// Levenshtein edit distance (small inputs, fine without optimisation)
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+// Tolerant fuzzy match — handles typos in either the query or the sheet
+// (e.g. sheet has "Phadinis" but user types "Phadnis"). Each query token
+// must substring-match a name token OR be within edit distance ≤ 2 (longer
+// tokens get up to ≤ 3) of any name token.
 function fuzzyMatchClients(clients, query) {
   if (!query) return clients;
   const q = query.trim().toLowerCase();
-  const tokens = q.split(/\s+/).filter(Boolean);
+  if (!q) return clients;
+  const queryTokens = q.split(/\s+/).filter(Boolean);
+  const tokenMatches = (qTok, nameTokens) => {
+    if (qTok.length <= 2) return nameTokens.some((nt) => nt.startsWith(qTok));
+    if (nameTokens.some((nt) => nt.includes(qTok) || qTok.includes(nt))) return true;
+    const allowed = qTok.length >= 8 ? 3 : qTok.length >= 5 ? 2 : 1;
+    return nameTokens.some((nt) => editDistance(qTok, nt) <= allowed);
+  };
   return clients.filter((c) => {
     const name = c.name.toLowerCase();
-    return tokens.every((t) => name.includes(t));
+    const nameTokens = name.split(/\s+/).filter(Boolean);
+    if (name.includes(q)) return true;
+    return queryTokens.every((t) => tokenMatches(t, nameTokens));
   });
 }
 
