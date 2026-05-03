@@ -16,11 +16,22 @@ const DATA_DIR = path.join(__dirname, 'data');
 const REPORTS_DIR = path.join(__dirname, 'reports');
 
 function ensureDir(d) { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); }
+const MAX_LOG_BYTES = 100 * 1024 * 1024; // 100MB cap; rotated to bot.log.1
 function logLine(msg) {
   const line = `${new Date().toISOString()} ${msg}`;
-  console.log(line);
-  ensureDir(DATA_DIR);
-  fs.appendFileSync(path.join(DATA_DIR, 'bot.log'), line + '\n');
+  // Never throw out of logLine — a throw here would re-enter uncaughtException → infinite loop.
+  try { process.stdout.write(line + '\n'); } catch (_) {}
+  try {
+    ensureDir(DATA_DIR);
+    const logPath = path.join(DATA_DIR, 'bot.log');
+    try {
+      const st = fs.statSync(logPath);
+      if (st.size > MAX_LOG_BYTES) {
+        try { fs.renameSync(logPath, logPath + '.1'); } catch (_) {}
+      }
+    } catch (_) {}
+    fs.appendFileSync(logPath, line + '\n');
+  } catch (_) {}
 }
 
 async function pMap(items, mapper, concurrency) {
@@ -194,11 +205,13 @@ async function runSingleUrl(url, displayName) {
   return { ok: true, summary, pdfPath: localPdfPath, pdfLink, driveLink };
 }
 
+// Use process.stderr directly so a failing logLine cannot retrigger this
+// handler and cause the EIO-loop that filled the disk on 2026-05-03.
 process.on('uncaughtException', (err) => {
-  logLine(`[fatal] uncaughtException: ${err.stack || err.message}`);
+  try { process.stderr.write(`[fatal] uncaughtException: ${err && (err.stack || err.message) || err}\n`); } catch (_) {}
 });
 process.on('unhandledRejection', (err) => {
-  logLine(`[fatal] unhandledRejection: ${err && (err.stack || err.message) || err}`);
+  try { process.stderr.write(`[fatal] unhandledRejection: ${err && (err.stack || err.message) || err}\n`); } catch (_) {}
 });
 
 function parseArgs() {
@@ -255,4 +268,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { runOnce };
+module.exports = { runOnce, runSingleUrl };
